@@ -98,12 +98,48 @@ function unmarkPending(key) { setPendingKeys(getPendingKeys().filter(k => k !== 
 function saveLocal(key, value) {
   try { localStorage.setItem(localKey(key), JSON.stringify(value)); } catch {}
 }
+function legacyLocalKeys(key) {
+  const last = key.split("/").pop();
+  return [last, key.replace(/\W+/g, "_")];
+}
 function loadLocal(key, fallback) {
   try {
     const v = localStorage.getItem(localKey(key));
     if (v !== null) return JSON.parse(v);
   } catch {}
+  for (const oldKey of legacyLocalKeys(key)) {
+    try {
+      const v = localStorage.getItem(oldKey);
+      if (v !== null) {
+        const parsed = JSON.parse(v);
+        saveLocal(key, parsed);
+        markPending(key);
+        return parsed;
+      }
+    } catch {}
+  }
   return fallback;
+}
+function isRecordList(value) {
+  return Array.isArray(value) && value.every(item => item && typeof item === "object" && "id" in item);
+}
+function mergeRecordLists(localValue, remoteValue) {
+  if (!isRecordList(localValue)) return localValue;
+  if (!isRecordList(remoteValue)) return localValue;
+  const map = new Map(remoteValue.map(item => [item.id, item]));
+  localValue.forEach(item => map.set(item.id, item));
+  return Array.from(map.values());
+}
+async function saveRemote(key, value) {
+  if (isRecordList(value)) {
+    const snap = await window.DB.ref(key).once("value");
+    const merged = mergeRecordLists(value, snap.val());
+    await window.DB.ref(key).set(merged);
+    saveLocal(key, merged);
+    return merged;
+  }
+  await window.DB.ref(key).set(value);
+  return value;
 }
 
 // Load once from Firebase or localStorage
@@ -116,9 +152,11 @@ async function load(key, fallback) {
         window.DB.ref(key).once("value", snap => {
           const v = snap.val();
           if (v !== null && v !== undefined) {
-            saveLocal(key, v);
-            resolve(v);
+            const next = getPendingKeys().includes(key) ? mergeRecordLists(local, v) : v;
+            saveLocal(key, next);
+            resolve(next);
           } else {
+            if (local !== fallback) markPending(key);
             resolve(local);
           }
         }, () => resolve(local));
@@ -134,7 +172,7 @@ async function save(key, value) {
   saveLocal(key, value);
   if (FB_CONFIGURED && window.DB) {
     try {
-      await window.DB.ref(key).set(value);
+      await saveRemote(key, value);
       unmarkPending(key);
     } catch(e) {
       markPending(key);
@@ -150,7 +188,7 @@ async function syncPending() {
     const value = loadLocal(key, undefined);
     if (value === undefined) continue;
     try {
-      await window.DB.ref(key).set(value);
+      await saveRemote(key, value);
       unmarkPending(key);
     } catch(e) {
       console.warn("Sync pendente falhou:", e.message);
@@ -166,6 +204,13 @@ function subscribe(key, callback) {
     ref.on("value", snap => {
       const v = snap.val();
       if (v !== null && v !== undefined) {
+        if (getPendingKeys().includes(key)) {
+          const local = loadLocal(key, v);
+          const next = mergeRecordLists(local, v);
+          saveLocal(key, next);
+          callback(next);
+          return;
+        }
         saveLocal(key, v);
         callback(v);
       }
