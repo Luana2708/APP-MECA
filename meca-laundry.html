@@ -1656,15 +1656,19 @@ function App() {
   }
   function remove(list, setList, id) {
     const found = list.find(x => x.id === id);
+    let key = null;
     if (found) {
-      if (setList === setClients) markDeleted(K.clients, id);
-      else if (setList === setServices) markDeleted(K.services, id);
-      else if (setList === setQuotes) markDeleted(K.quotes, id);
-      else if (setList === setSchedule) markDeleted(K.schedule, id);
-      else if (setList === setLaudos) markDeleted(K.laudos, id);
-      else if (setList === setTecnicos) markDeleted(K.tecnicos, id);
+      if (setList === setClients) key = K.clients;
+      else if (setList === setServices) key = K.services;
+      else if (setList === setQuotes) key = K.quotes;
+      else if (setList === setSchedule) key = K.schedule;
+      else if (setList === setLaudos) key = K.laudos;
+      else if (setList === setTecnicos) key = K.tecnicos;
+      if (key) markDeleted(key, id);
     }
-    setList(list.filter(x=>x.id!==id));
+    const next = list.filter(x=>x.id!==id);
+    setList(next);
+    if (key) save(key, next);
   }
 
   // ── TABS ───────────────────────────────────────────────────
