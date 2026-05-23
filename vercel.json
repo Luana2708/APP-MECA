@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/",
+      "destination": "/meca-laundry.html"
+    }
+  ]
+}
