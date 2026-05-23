@@ -1746,6 +1746,15 @@ function App() {
   function upsert(list, setList, item) {
     const next = list.find(x=>x.id===item.id) ? list.map(x=>x.id===item.id?item:x) : [item,...list];
     setList(next);
+    let key = null;
+    if (setList === setClients) key = K.clients;
+    else if (setList === setServices) key = K.services;
+    else if (setList === setQuotes) key = K.quotes;
+    else if (setList === setSchedule) key = K.schedule;
+    else if (setList === setLaudos) key = K.laudos;
+    else if (setList === setTecnicos) key = K.tecnicos;
+    else if (setList === setUsers) key = K.users;
+    if (key) save(key, next);
   }
   function remove(list, setList, id) {
     const found = list.find(x => x.id === id);
@@ -1785,7 +1794,9 @@ function App() {
     setCurrentUser(user);
     setAuthed(true);
     setLogin(false);
-    const first = TABS.find(t => canAccessForUser(t, user) && !t.free);
+    const first = user?.role === "master"
+      ? TABS.find(t => t.id === "usuarios")
+      : TABS.find(t => canAccessForUser(t, user) && !t.free);
     setTab(first?.id || "laudo");
   };
 
