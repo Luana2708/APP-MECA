@@ -1481,6 +1481,8 @@ function App() {
   function makeSetter(key, rawSetter) {
     return useCallback(val => {
       rawSetter(val);
+      saveLocal(key, val);
+      if (navigator.onLine === false) markPending(key);
       dirty.current[key] = val;
     }, []);
   }
@@ -1504,8 +1506,18 @@ function App() {
     const handler = () => {
       if (document.visibilityState === "hidden") flush();
     };
+    const beforeUnload = () => {
+      Object.entries(dirty.current).forEach(([key, value]) => {
+        saveLocal(key, value);
+        markPending(key);
+      });
+    };
     document.addEventListener("visibilitychange", handler);
-    return () => document.removeEventListener("visibilitychange", handler);
+    window.addEventListener("beforeunload", beforeUnload);
+    return () => {
+      document.removeEventListener("visibilitychange", handler);
+      window.removeEventListener("beforeunload", beforeUnload);
+    };
   }, [flush]);
 
   // ── Also save periodically (every 30s) ───────────────────

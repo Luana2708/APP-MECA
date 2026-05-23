@@ -1,4 +1,4 @@
-const CACHE_NAME = "meca-laundry-v2";
+const CACHE_NAME = "meca-laundry-v3";
 const APP_SHELL = [
   "./",
   "./meca-laundry.html",
