@@ -163,7 +163,6 @@ async function saveRemote(key, value) {
     const merged = mergeRecordLists(value, remote).filter(item => !deletedIds.includes(item.id));
     await window.DB.ref(key).set(merged);
     saveLocal(key, merged);
-    clearDeletedIds(key, deletedIds);
     return merged;
   }
   await window.DB.ref(key).set(value);
@@ -234,17 +233,17 @@ function subscribe(key, callback) {
     ref.on("value", snap => {
       const v = snap.val();
       if (v !== null && v !== undefined) {
+        const deletedIds = getDeletedIds(key);
+        const remote = isRecordList(v) ? v.filter(item => !deletedIds.includes(item.id)) : v;
         if (getPendingKeys().includes(key)) {
-          const deletedIds = getDeletedIds(key);
-          const local = loadLocal(key, v);
-          const remote = isRecordList(v) ? v.filter(item => !deletedIds.includes(item.id)) : v;
+          const local = loadLocal(key, remote);
           const next = mergeRecordLists(local, remote).filter(item => !deletedIds.includes(item.id));
           saveLocal(key, next);
           callback(next);
           return;
         }
-        saveLocal(key, v);
-        callback(v);
+        saveLocal(key, remote);
+        callback(remote);
       }
     });
     return () => ref.off("value");
