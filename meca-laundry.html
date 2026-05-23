@@ -84,6 +84,7 @@ const K = {
 
 const FB_CONFIGURED = window.FIREBASE_CONFIG && window.FIREBASE_CONFIG.apiKey !== "COLE_AQUI";
 const PENDING_SYNC_KEY = "meca/pendingSync";
+const DELETED_SYNC_KEY = "meca/deletedRecords";
 
 function localKey(key) { return "meca_local_" + key.replace(/\W+/g, "_"); }
 function getPendingKeys() {
@@ -95,6 +96,30 @@ function setPendingKeys(keys) {
 }
 function markPending(key) { setPendingKeys([...getPendingKeys(), key]); }
 function unmarkPending(key) { setPendingKeys(getPendingKeys().filter(k => k !== key)); }
+function getDeletedRecords() {
+  try { return JSON.parse(localStorage.getItem(DELETED_SYNC_KEY) || "{}"); }
+  catch { return {}; }
+}
+function setDeletedRecords(data) {
+  try { localStorage.setItem(DELETED_SYNC_KEY, JSON.stringify(data)); } catch {}
+}
+function getDeletedIds(key) {
+  const data = getDeletedRecords();
+  return Array.isArray(data[key]) ? data[key] : [];
+}
+function markDeleted(key, id) {
+  const data = getDeletedRecords();
+  data[key] = [...new Set([...(data[key] || []), id])];
+  setDeletedRecords(data);
+  markPending(key);
+}
+function clearDeletedIds(key, ids) {
+  if (!ids.length) return;
+  const data = getDeletedRecords();
+  data[key] = (data[key] || []).filter(id => !ids.includes(id));
+  if (!data[key].length) delete data[key];
+  setDeletedRecords(data);
+}
 function saveLocal(key, value) {
   try { localStorage.setItem(localKey(key), JSON.stringify(value)); } catch {}
 }
@@ -133,9 +158,12 @@ function mergeRecordLists(localValue, remoteValue) {
 async function saveRemote(key, value) {
   if (isRecordList(value)) {
     const snap = await window.DB.ref(key).once("value");
-    const merged = mergeRecordLists(value, snap.val());
+    const deletedIds = getDeletedIds(key);
+    const remote = isRecordList(snap.val()) ? snap.val().filter(item => !deletedIds.includes(item.id)) : snap.val();
+    const merged = mergeRecordLists(value, remote).filter(item => !deletedIds.includes(item.id));
     await window.DB.ref(key).set(merged);
     saveLocal(key, merged);
+    clearDeletedIds(key, deletedIds);
     return merged;
   }
   await window.DB.ref(key).set(value);
@@ -152,7 +180,9 @@ async function load(key, fallback) {
         window.DB.ref(key).once("value", snap => {
           const v = snap.val();
           if (v !== null && v !== undefined) {
-            const next = getPendingKeys().includes(key) ? mergeRecordLists(local, v) : v;
+            const deletedIds = getDeletedIds(key);
+            const remote = isRecordList(v) ? v.filter(item => !deletedIds.includes(item.id)) : v;
+            const next = getPendingKeys().includes(key) ? mergeRecordLists(local, remote).filter(item => !deletedIds.includes(item.id)) : remote;
             saveLocal(key, next);
             resolve(next);
           } else {
@@ -205,8 +235,10 @@ function subscribe(key, callback) {
       const v = snap.val();
       if (v !== null && v !== undefined) {
         if (getPendingKeys().includes(key)) {
+          const deletedIds = getDeletedIds(key);
           const local = loadLocal(key, v);
-          const next = mergeRecordLists(local, v);
+          const remote = isRecordList(v) ? v.filter(item => !deletedIds.includes(item.id)) : v;
+          const next = mergeRecordLists(local, remote).filter(item => !deletedIds.includes(item.id));
           saveLocal(key, next);
           callback(next);
           return;
@@ -1623,7 +1655,18 @@ function App() {
     const next = list.find(x=>x.id===item.id) ? list.map(x=>x.id===item.id?item:x) : [item,...list];
     setList(next);
   }
-  function remove(list, setList, id) { setList(list.filter(x=>x.id!==id)); }
+  function remove(list, setList, id) {
+    const found = list.find(x => x.id === id);
+    if (found) {
+      if (setList === setClients) markDeleted(K.clients, id);
+      else if (setList === setServices) markDeleted(K.services, id);
+      else if (setList === setQuotes) markDeleted(K.quotes, id);
+      else if (setList === setSchedule) markDeleted(K.schedule, id);
+      else if (setList === setLaudos) markDeleted(K.laudos, id);
+      else if (setList === setTecnicos) markDeleted(K.tecnicos, id);
+    }
+    setList(list.filter(x=>x.id!==id));
+  }
 
   // ── TABS ───────────────────────────────────────────────────
   const TABS = [
