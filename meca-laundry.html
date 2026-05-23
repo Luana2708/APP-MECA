@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
   <meta name="theme-color" content="#0d1929"/>
   <title>Meca Laundry Solutions</title>
-  <link rel="manifest" id="pwa-manifest"/>
+  <link rel="manifest" href="manifest.webmanifest"/>
   <!-- Firebase Realtime Database -->
   <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
@@ -60,6 +60,11 @@
       };
       const el = document.getElementById('pwa-manifest');
       if(el) el.href = URL.createObjectURL(new Blob([JSON.stringify(manifest)],{type:'application/json'}));
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.register("./sw.js").catch(err => {
+          console.warn("Service Worker nao registrado:", err.message);
+        });
+      }
     });
   </script>
 </head>
@@ -78,43 +83,92 @@ const K = {
 };
 
 const FB_CONFIGURED = window.FIREBASE_CONFIG && window.FIREBASE_CONFIG.apiKey !== "COLE_AQUI";
+const PENDING_SYNC_KEY = "meca/pendingSync";
+
+function localKey(key) { return "meca_local_" + key.replace(/\W+/g, "_"); }
+function getPendingKeys() {
+  try { return JSON.parse(localStorage.getItem(PENDING_SYNC_KEY) || "[]"); }
+  catch { return []; }
+}
+function setPendingKeys(keys) {
+  try { localStorage.setItem(PENDING_SYNC_KEY, JSON.stringify([...new Set(keys)])); } catch {}
+}
+function markPending(key) { setPendingKeys([...getPendingKeys(), key]); }
+function unmarkPending(key) { setPendingKeys(getPendingKeys().filter(k => k !== key)); }
+function saveLocal(key, value) {
+  try { localStorage.setItem(localKey(key), JSON.stringify(value)); } catch {}
+}
+function loadLocal(key, fallback) {
+  try {
+    const v = localStorage.getItem(localKey(key));
+    if (v !== null) return JSON.parse(v);
+  } catch {}
+  return fallback;
+}
 
 // Load once from Firebase or localStorage
 async function load(key, fallback) {
+  const local = loadLocal(key, fallback);
+  if (navigator.onLine === false) return local;
   if (FB_CONFIGURED && window.DB) {
     try {
       return await new Promise((resolve) => {
         window.DB.ref(key).once("value", snap => {
           const v = snap.val();
-          resolve(v !== null && v !== undefined ? v : fallback);
-        }, () => resolve(fallback));
+          if (v !== null && v !== undefined) {
+            saveLocal(key, v);
+            resolve(v);
+          } else {
+            resolve(local);
+          }
+        }, () => resolve(local));
       });
-    } catch { return fallback; }
+    } catch { return local; }
   } else {
-    // fallback: localStorage (uses last segment of path as key)
-    const k = key.split("/").pop();
-    try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : fallback; }
-    catch { return fallback; }
+    return local;
   }
 }
 
 // Save to Firebase or localStorage
 async function save(key, value) {
+  saveLocal(key, value);
   if (FB_CONFIGURED && window.DB) {
-    try { await window.DB.ref(key).set(value); } catch(e) { console.warn("Firebase save error:", e.message); }
-  } else {
-    const k = key.split("/").pop();
-    try { localStorage.setItem(k, JSON.stringify(value)); } catch {}
+    try {
+      await window.DB.ref(key).set(value);
+      unmarkPending(key);
+    } catch(e) {
+      markPending(key);
+      console.warn("Firebase save error:", e.message);
+    }
+  }
+}
+
+async function syncPending() {
+  if (!FB_CONFIGURED || !window.DB || navigator.onLine === false) return;
+  const keys = getPendingKeys();
+  for (const key of keys) {
+    const value = loadLocal(key, undefined);
+    if (value === undefined) continue;
+    try {
+      await window.DB.ref(key).set(value);
+      unmarkPending(key);
+    } catch(e) {
+      console.warn("Sync pendente falhou:", e.message);
+      break;
+    }
   }
 }
 
 // Subscribe to realtime updates (Firebase only)
 function subscribe(key, callback) {
-  if (FB_CONFIGURED && window.DB) {
+  if (FB_CONFIGURED && window.DB && navigator.onLine !== false) {
     const ref = window.DB.ref(key);
     ref.on("value", snap => {
       const v = snap.val();
-      if (v !== null && v !== undefined) callback(v);
+      if (v !== null && v !== undefined) {
+        saveLocal(key, v);
+        callback(v);
+      }
     });
     return () => ref.off("value");
   }
@@ -1458,6 +1512,16 @@ function App() {
   useEffect(() => {
     const t = setInterval(flush, 30000);
     return () => clearInterval(t);
+  }, [flush]);
+
+  useEffect(() => {
+    const handleOnline = async () => {
+      await flush();
+      await syncPending();
+    };
+    window.addEventListener("online", handleOnline);
+    handleOnline();
+    return () => window.removeEventListener("online", handleOnline);
   }, [flush]);
 
   // ── Load all data on mount + realtime subscriptions ───────
